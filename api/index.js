@@ -1,11 +1,11 @@
 // api/index.js
 // Single-file Express backend for PS12 - Universal AI Chat Interface
-// Runs as a Vercel Serverless Function. ES Modules.
+// Runs as a Vercel Serverless Function. CommonJS.
 
-import express from 'express';
-import cors from 'cors';
-import mongoose from 'mongoose';
-import { GoogleGenAI } from '@google/genai';
+const express = require('express');
+const cors = require('cors');
+const mongoose = require('mongoose');
+const { GoogleGenAI } = require('@google/genai');
 
 // ---------------------------------------------------------------------------
 // 1. Environment
@@ -282,6 +282,14 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+app.get('/', (req, res) => {
+  res.json({ status: 'ok' });
+});
+
+app.get('/api', (req, res) => {
+  res.json({ status: 'ok' });
+});
+
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok' });
 });
@@ -353,4 +361,4 @@ if (!process.env.VERCEL) {
     });
 }
 
-export default app;
+module.exports = app;
