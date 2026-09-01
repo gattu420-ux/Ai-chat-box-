@@ -2,7 +2,6 @@
   "name": "ps12-universal-ai-chat",
   "version": "1.0.0",
   "description": "PS12 - Universal AI Chat Interface backend (Express + MongoDB Atlas + Gemini API), deployable as a Vercel Serverless Function.",
-  "type": "module",
   "main": "api/index.js",
   "scripts": {
     "start": "node api/index.js",
