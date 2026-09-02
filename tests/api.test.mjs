@@ -63,3 +63,22 @@ test('persistent Gemini overload remains an honest 503 and never writes history'
     assert.equal(requests.length, 2); assert.equal(writes.length, 0);
   });
 });
+
+test('both Gemini paths share the universal persona and open greeting guidance', async () => {
+  await harness([JSON.stringify({ intent: 'answer_question' }), 'Hello! How can I help you today?'], async ({ post, requests }) => {
+    const response = await post({ sessionId: 'greeting-check', message: 'hi' });
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).message, 'Hello! How can I help you today?');
+    assert.equal(requests.length, 2);
+    for (const request of requests) {
+      assert.match(request.config.systemInstruction, /Universal AI assistant/);
+      assert.match(request.config.systemInstruction, /code generation and debugging, creative writing, research/);
+      assert.match(request.config.systemInstruction, /Hello! How can I help you today/);
+      assert.doesNotMatch(request.config.systemInstruction, /1-3 sentences/);
+      assert.ok(request.config.maxOutputTokens >= 4096);
+    }
+    assert.ok(requests[0].config.systemInstruction.includes(requests[1].config.systemInstruction));
+    assert.match(requests[0].config.systemInstruction, /Use database intents ONLY/);
+    assert.match(requests[0].config.systemInstruction, /write SQL to query orders/);
+  });
+});
