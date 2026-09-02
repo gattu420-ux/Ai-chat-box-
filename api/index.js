@@ -6,41 +6,27 @@ const express = require('express');
 const cors = require('cors');
 const mongoose = require('mongoose');
 const { GoogleGenAI } = require('@google/genai');
+const { createDatabaseConnector } = require('../server/database.cjs');
+const { generateWithRetry, providerStatus } = require('../server/gemini.cjs');
 
 // ---------------------------------------------------------------------------
 // 1. Environment
 // ---------------------------------------------------------------------------
 const MONGO_URI = process.env.MONGO_URI;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
 const PORT = process.env.PORT || 5000;
 
 if (!MONGO_URI) console.warn('[WARN] MONGO_URI is not set.');
 if (!GEMINI_API_KEY) console.warn('[WARN] GEMINI_API_KEY is not set.');
 
-const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY, httpOptions: { timeout: 10000 } });
 
 // ---------------------------------------------------------------------------
 // 2. MongoDB connection (cached across serverless invocations)
 // ---------------------------------------------------------------------------
-let isConnected = false;
-
-async function connectDB() {
-  if (isConnected || mongoose.connection.readyState === 1) {
-    isConnected = true;
-    return;
-  }
-  try {
-    await mongoose.connect(MONGO_URI, {
-      bufferCommands: false,
-    });
-    isConnected = true;
-    console.log('[DB] MongoDB connected');
-  } catch (err) {
-    isConnected = false;
-    console.error('[DB] MongoDB connection error:', err.message);
-    throw err;
-  }
-}
+const mongoCache = globalThis.__relayMongoCache || (globalThis.__relayMongoCache = { promise: null });
+const connectDB = createDatabaseConnector(mongoose, MONGO_URI, mongoCache);
 
 // ---------------------------------------------------------------------------
 // 3. Mongoose Models
@@ -85,7 +71,8 @@ Classify the user's latest message into EXACTLY one JSON object with this schema
   "intent": "query_data" | "analytics" | "mutate_data" | "run_function" | "clarify" | "answer_question",
   "target": "orders" | "accounts" | "payment_gateway" | "none",
   "filters": { "region": string or null, "status": string or null, "minAmount": number or null },
-  "clarificationQuestion": string or null
+  "clarificationQuestion": string or null,
+  "answer": string or null
 }
 
 Guidance:
@@ -94,7 +81,7 @@ Guidance:
 - "mutate_data": user wants to create/add/insert a new order or account.
 - "run_function": user asks about payment gateway / payment status / external service status.
 - "clarify": the request is ambiguous or missing critical info needed to act (e.g. unclear which entity, unclear filter). Set clarificationQuestion to a short, specific question.
-- "answer_question": general question not requiring data access (e.g. "what can you do?").
+- "answer_question": general question not requiring data access (e.g. "what can you do?"). Put a concise, helpful answer in "answer" (1-3 sentences). For other intents set "answer" to null. Never invent database records in an answer.
 - Use the recent conversation history to resolve references like "that", "those", "now filter by X". If a follow-up narrows an earlier query, carry over unmentioned filters from context when it's clearly a refinement.
 - Region values should be normalized to one of: "North", "South", "East", "West" when identifiable, else null.
 - Status values (for orders) should be normalized to one of: "pending", "shipped", "delivered", "cancelled" when identifiable, else null.
@@ -110,19 +97,23 @@ async function classifyIntent(message, history) {
     { role: 'user', parts: [{ text: message }] },
   ];
 
-  const response = await ai.models.generateContent({
-    model: 'gemini-2.5-flash',
+  const response = await generateWithRetry(ai, {
+    model: GEMINI_MODEL,
     contents,
     config: {
       systemInstruction: INTENT_SYSTEM_INSTRUCTION,
       responseMimeType: 'application/json',
+      maxOutputTokens: 768,
+      thinkingConfig: { thinkingLevel: 'minimal' },
     },
   });
 
   const raw = response.text?.trim() || '{}';
 
   try {
-    return JSON.parse(raw);
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Invalid intent object');
+    return parsed;
   } catch (err) {
     console.error('[Gemini] Failed to parse intent JSON:', raw);
     return {
@@ -143,12 +134,14 @@ async function answerGeneralQuestion(message, history) {
     { role: 'user', parts: [{ text: message }] },
   ];
 
-  const response = await ai.models.generateContent({
-    model: 'gemini-2.5-flash',
+  const response = await generateWithRetry(ai, {
+    model: GEMINI_MODEL,
     contents,
     config: {
       systemInstruction:
         'You are a helpful assistant embedded in a unified data-chat interface. Answer concisely and clearly in 1-3 sentences.',
+      maxOutputTokens: 512,
+      thinkingConfig: { thinkingLevel: 'minimal' },
     },
   });
 
@@ -295,31 +288,44 @@ app.get('/api/health', (req, res) => {
 });
 
 app.post('/api/chat/message', async (req, res) => {
+  let checkpoint = performance.now();
+  const timings = [];
+  const markTiming = (name) => {
+    const now = performance.now();
+    timings.push(`${name};dur=${(now - checkpoint).toFixed(1)}`);
+    checkpoint = now;
+  };
   try {
     const { sessionId, message } = req.body || {};
 
-    if (!sessionId || !message) {
-      return res.status(400).json({ error: 'sessionId and message are required.' });
+    if (typeof sessionId !== 'string' || !sessionId.trim() || sessionId.length > 128 ||
+        typeof message !== 'string' || !message.trim() || message.length > 20000) {
+      return res.status(400).json({ error: 'A sessionId (up to 128 characters) and message (up to 20,000 characters) are required.' });
     }
 
     await connectDB();
+    markTiming('db_connect');
 
     // Step A: fetch last 6 messages for context
     const historyDocs = await ConversationHistory.find({ sessionId })
-      .sort({ timestamp: -1 })
+      .sort({ timestamp: -1, _id: -1 })
       .limit(6)
       .lean();
     const history = historyDocs.reverse(); // chronological order
+    markTiming('history');
 
     // Step B: classify intent
     const classification = await classifyIntent(message, history);
+    markTiming('classify');
 
     // Step C: dispatch
     let result = await dispatchIntent(classification);
 
     if (!result) {
       // answer_question path
-      const answer = await answerGeneralQuestion(message, history);
+      const answer = typeof classification.answer === 'string' && classification.answer.trim()
+        ? classification.answer.trim()
+        : await answerGeneralQuestion(message, history);
       result = {
         intent: 'answer_question',
         responseType: 'text',
@@ -329,9 +335,14 @@ app.post('/api/chat/message', async (req, res) => {
       };
     }
 
+    markTiming('dispatch');
     // Step D: persist conversation
-    await ConversationHistory.create({ sessionId, role: 'user', message });
-    await ConversationHistory.create({ sessionId, role: 'assistant', message: result.message });
+    await ConversationHistory.insertMany([
+      { sessionId, role: 'user', message },
+      { sessionId, role: 'assistant', message: result.message },
+    ]);
+    markTiming('save');
+    res.set('Server-Timing', timings.join(', '));
 
     // Step E: unified response
     return res.json({
@@ -343,7 +354,11 @@ app.post('/api/chat/message', async (req, res) => {
     });
   } catch (err) {
     console.error('[POST /api/chat/message] Error:', err);
-    return res.status(500).json({ error: 'Internal server error', details: err.message });
+    if ([429, 502, 503, 504].includes(providerStatus(err))) {
+      res.set('Retry-After', '2');
+      return res.status(503).json({ error: 'The AI service is temporarily busy. Please try again shortly.' });
+    }
+    return res.status(500).json({ error: 'Unable to complete the reply. Please try again.' });
   }
 });
 

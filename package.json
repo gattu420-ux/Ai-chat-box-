@@ -1,18 +1,38 @@
 {
-  "name": "ps12-universal-ai-chat",
+  "name": "relay-ai-chat-frontend",
+  "private": true,
   "version": "1.0.0",
-  "description": "PS12 - Universal AI Chat Interface backend (Express + MongoDB Atlas + Gemini API), deployable as a Vercel Serverless Function.",
-  "main": "api/index.js",
+  "type": "module",
+  "engines": { "node": "24.x" },
   "scripts": {
-    "start": "node api/index.js",
-    "dev": "node api/index.js",
-    "seed": "node seed.js"
+    "dev": "vite",
+    "build": "tsc -p tsconfig.app.json && vite build --configLoader runner",
+    "preview": "vite preview",
+    "dev:api": "node --env-file=.env.local api/index.js",
+    "test": "node --experimental-strip-types --test tests/*.test.mjs",
+    "seed": "node --env-file=.env.local seed.js"
   },
   "dependencies": {
-    "@google/genai": "^0.3.0",
+    "@google/genai": "^2.20.0",
+    "clsx": "^2.1.1",
     "cors": "^2.8.5",
     "dotenv": "^17.4.2",
     "express": "^4.19.2",
-    "mongoose": "^8.5.1"
+    "lucide-react": "^0.468.0",
+    "mongoose": "^8.5.1",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-markdown": "^10.1.0",
+    "tailwind-merge": "^3.0.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.0.0",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "tailwindcss": "^4.0.0",
+    "typescript": "~5.7.2",
+    "vite": "^7.2.2"
   }
 }

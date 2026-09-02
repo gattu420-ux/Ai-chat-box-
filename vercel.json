@@ -1,9 +1,9 @@
 {
   "version": 2,
+  "framework": "vite",
   "rewrites": [
-    {
-      "source": "/(.*)",
-      "destination": "/api/index.js"
-    }
+    { "source": "/api", "destination": "/api/index.js" },
+    { "source": "/api/(.*)", "destination": "/api/index.js" },
+    { "source": "/(.*)", "destination": "/index.html" }
   ]
 }

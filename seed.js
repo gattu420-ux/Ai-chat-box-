@@ -2,7 +2,7 @@
 // Standalone script to seed MongoDB Atlas with demo Accounts and Orders for PS12.
 // Usage: node seed.js  (requires MONGO_URI in your environment / .env)
 
-const mongoose = require('mongoose');
+import mongoose from 'mongoose';
 
 const MONGO_URI = process.env.MONGO_URI;
 
