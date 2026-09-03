@@ -1,6 +1,7 @@
 import type { Conversation, ConversationArchive, Message } from './types';
 
 export const ARCHIVE_KEY = 'relay-conversations-v2';
+export const TAB_SESSION_KEY = 'active_tab_session_id';
 const LEGACY_MESSAGES = 'relay-chat-messages-v1';
 const LEGACY_SESSION = 'relay-session-id-v1';
 
@@ -42,12 +43,12 @@ function freshArchive(conversations: Conversation[] = []): ChatArchiveState {
 }
 
 export function serializeArchive(state: ChatArchiveState): string {
-  // Selection and unsent drafts must not be restored on the next page load.
+  // Shared history excludes tab-specific selection and unsent drafts.
   return JSON.stringify({ version: 2, conversations: state.conversations });
 }
 
 // Read lazily before the first render: an empty mount effect must never erase history.
-export function loadArchive(storage?: Pick<Storage, 'getItem'>): { archive: ChatArchiveState; warning?: string } {
+function readArchive(storage?: Pick<Storage, 'getItem'>): { archive: ChatArchiveState; warning?: string } {
   try {
     if (!storage) return { archive: freshArchive() };
     const saved = storage.getItem(ARCHIVE_KEY);
@@ -74,6 +75,31 @@ export function loadArchive(storage?: Pick<Storage, 'getItem'>): { archive: Chat
     return { archive: freshArchive() };
   } catch {
     return { archive: freshArchive(), warning: 'Saved chats could not be loaded. Existing stored data has not been changed.' };
+  }
+}
+
+export function loadArchive(storage?: Pick<Storage, 'getItem'>, tabStorage?: Pick<Storage, 'getItem'>): {
+  archive: ChatArchiveState; warning?: string; tabWarning?: string;
+} {
+  const loaded = readArchive(storage);
+  try {
+    const activeId = tabStorage?.getItem(TAB_SESSION_KEY);
+    if (activeId && loaded.archive.conversations.some((chat) => chat.id === activeId)) {
+      return { ...loaded, archive: { ...loaded.archive, activeId, draft: null } };
+    }
+  } catch {
+    // Unavailable sessionStorage must not discard readable localStorage history.
+    return { ...loaded, tabWarning: 'Tab storage is unavailable. Refreshing may open a new chat.' };
+  }
+  return loaded;
+}
+
+export function saveTabSession(state: ChatArchiveState, tabStorage: Pick<Storage, 'setItem' | 'removeItem'>): void {
+  if (state.conversations.some((chat) => chat.id === state.activeId)) {
+    tabStorage.setItem(TAB_SESSION_KEY, state.activeId);
+  } else {
+    // New Chat (including deletion of the selected chat) clears this tab only.
+    tabStorage.removeItem(TAB_SESSION_KEY);
   }
 }
 
