@@ -377,6 +377,10 @@ app.post('/api/chat/message', async (req, res) => {
     });
   } catch (err) {
     console.error('[POST /api/chat/message] Error:', err);
+    if (err.code === 'SEARCH_QUOTA_EXCEEDED') {
+      return res.status(503).json({ code: 'SEARCH_QUOTA_EXCEEDED',
+        error: "Google Search is unavailable because this project's Google quota or rate limit was reached. Please try again later." });
+    }
     if (err.code === 'SEARCH_UNAVAILABLE') {
       return res.status(503).json({ error: 'Google Search did not return verifiable sources. Please try again.' });
     }

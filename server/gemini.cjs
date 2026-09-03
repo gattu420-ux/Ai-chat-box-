@@ -25,6 +25,11 @@ async function generateGroundedAnswer(ai, { model, question, systemInstruction }
       thinkingConfig: { thinkingLevel: 'minimal' },
       httpOptions: { timeout: 20000 },
     },
+  }).catch((error) => {
+    if (providerStatus(error) === 429) {
+      throw Object.assign(new Error('Google Search quota or rate limit reached.'), { code: 'SEARCH_QUOTA_EXCEEDED' });
+    }
+    throw error;
   });
   const groundingMetadata = response.candidates?.[0]?.groundingMetadata;
   const sources = (groundingMetadata?.groundingChunks ?? []).some((chunk) => {

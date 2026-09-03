@@ -76,6 +76,19 @@ test('ungrounded output cannot be advertised as a successful search or saved as 
   });
 });
 
+test('search quota failures are explicit and never save an unverified answer', async () => {
+  const quota = () => Object.assign(new Error('private quota details'), { status: 429 });
+  await harness([JSON.stringify({ intent: 'answer_question', needsSearch: true }), quota(), quota()], async ({ post, writes }) => {
+    const response = await post({ sessionId: 'quota-fixture', message: 'Latest tech news?' });
+    const payload = await response.json();
+    assert.equal(response.status, 503);
+    assert.equal(payload.code, 'SEARCH_QUOTA_EXCEEDED');
+    assert.match(payload.error, /Google quota or rate limit/);
+    assert.doesNotMatch(payload.error, /private quota details/);
+    assert.equal(writes.length, 0);
+  });
+});
+
 test('recent internal orders remain database-only even if search flag is set', async () => {
   await harness([JSON.stringify({ intent: 'query_data', target: 'orders', filters: {}, needsSearch: true })], async ({ post, requests }) => {
     const response = await post({ sessionId: 'orders-fixture', message: 'Show our most recent internal orders' });
