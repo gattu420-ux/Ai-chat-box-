@@ -4,13 +4,16 @@ export const ARCHIVE_KEY = 'relay-conversations-v2';
 const LEGACY_MESSAGES = 'relay-chat-messages-v1';
 const LEGACY_SESSION = 'relay-session-id-v1';
 
+// The unsent draft is visit-local, never part of the saved sidebar archive.
+export type ChatArchiveState = ConversationArchive & { draft: Conversation | null };
+
 export function createId(): string {
   return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
 }
 
 export function createConversation(id: string = createId()): Conversation {
   const now = Date.now();
-  return { id, title: 'New conversation', messages: [], createdAt: now, updatedAt: now };
+  return { id, title: 'New Chat', messages: [], createdAt: now, updatedAt: now };
 }
 
 export function titleFromPrompt(prompt: string) {
@@ -33,13 +36,18 @@ function isConversation(value: unknown): value is Conversation {
     Array.isArray(chat.messages) && chat.messages.every(isMessage);
 }
 
-function freshArchive(): ConversationArchive {
+function freshArchive(conversations: Conversation[] = []): ChatArchiveState {
   const chat = createConversation();
-  return { version: 2, activeId: chat.id, conversations: [chat] };
+  return { version: 2, activeId: chat.id, draft: chat, conversations };
+}
+
+export function serializeArchive(state: ChatArchiveState): string {
+  // Selection and unsent drafts must not be restored on the next page load.
+  return JSON.stringify({ version: 2, conversations: state.conversations });
 }
 
 // Read lazily before the first render: an empty mount effect must never erase history.
-export function loadArchive(storage?: Pick<Storage, 'getItem'>): { archive: ConversationArchive; warning?: string } {
+export function loadArchive(storage?: Pick<Storage, 'getItem'>): { archive: ChatArchiveState; warning?: string } {
   try {
     if (!storage) return { archive: freshArchive() };
     const saved = storage.getItem(ARCHIVE_KEY);
@@ -50,10 +58,9 @@ export function loadArchive(storage?: Pick<Storage, 'getItem'>): { archive: Conv
           new Set(value.conversations.map((chat: Conversation) => chat.id)).size !== value.conversations.length) {
         throw new Error('Invalid conversation archive');
       }
-      if (!value.conversations.length) return { archive: freshArchive() };
-      return { archive: { version: 2, conversations: value.conversations,
-        activeId: value.conversations.some((chat: Conversation) => chat.id === value.activeId)
-          ? value.activeId : value.conversations[0].id } };
+      // Older versions saved activeId and empty drafts. Keep all real history,
+      // but always open a newly generated, unarchived conversation.
+      return { archive: freshArchive(value.conversations.filter((chat: Conversation) => chat.messages.length > 0)) };
     }
     const legacy = JSON.parse(storage.getItem(LEGACY_MESSAGES) || '[]');
     if (Array.isArray(legacy) && legacy.length && legacy.every(isMessage)) {
@@ -62,7 +69,7 @@ export function loadArchive(storage?: Pick<Storage, 'getItem'>): { archive: Conv
       chat.title = titleFromPrompt(legacy.find((message) => message.role === 'user')?.message || 'Saved conversation');
       chat.createdAt = legacy[0].createdAt;
       chat.updatedAt = legacy[legacy.length - 1].createdAt;
-      return { archive: { version: 2, activeId: chat.id, conversations: [chat] } };
+      return { archive: freshArchive([chat]) };
     }
     return { archive: freshArchive() };
   } catch {
@@ -76,31 +83,31 @@ export type ArchiveAction =
   | { type: 'delete'; id: string; fallback: Conversation }
   | { type: 'append'; id: string; message: Message };
 
-export function archiveReducer(state: ConversationArchive, action: ArchiveAction): ConversationArchive {
+export function archiveReducer(state: ChatArchiveState, action: ArchiveAction): ChatArchiveState {
   switch (action.type) {
     case 'new': {
-      const empty = state.conversations.find((chat) => chat.messages.length === 0);
-      return { ...state, activeId: empty?.id ?? action.conversation.id,
-        conversations: empty ? state.conversations : [action.conversation, ...state.conversations] };
+      return { ...state, activeId: action.conversation.id, draft: action.conversation };
     }
     case 'select':
       return state.conversations.some((chat) => chat.id === action.id) ? { ...state, activeId: action.id } : state;
     case 'delete': {
       const remaining = state.conversations.filter((chat) => chat.id !== action.id);
-      const conversations = remaining.length ? remaining : [action.fallback];
-      return { ...state, conversations, activeId: state.activeId === action.id ? conversations[0].id : state.activeId };
+      return { ...state, conversations: remaining,
+        ...(state.activeId === action.id ? { activeId: action.fallback.id, draft: action.fallback } : {}) };
     }
     case 'append': {
       // A late response cannot resurrect a deleted chat or land in a different session.
-      if (!state.conversations.some((chat) => chat.id === action.id)) return state;
-      const conversations = state.conversations.map((chat) => chat.id !== action.id ? chat : {
+      const committingDraft = state.draft?.id === action.id && state.activeId === action.id && action.message.role === 'user';
+      if (!committingDraft && !state.conversations.some((chat) => chat.id === action.id)) return state;
+      const source = committingDraft ? [state.draft!, ...state.conversations] : state.conversations;
+      const conversations = source.map((chat) => chat.id !== action.id ? chat : {
         ...chat,
         title: action.message.role === 'user' && !chat.messages.some((message) => message.role === 'user')
           ? titleFromPrompt(action.message.message) : chat.title,
         updatedAt: action.message.createdAt,
         messages: [...chat.messages, action.message],
       }).sort((a, b) => b.updatedAt - a.updatedAt);
-      return { ...state, conversations };
+      return { ...state, conversations, draft: committingDraft ? null : state.draft };
     }
   }
 }

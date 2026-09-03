@@ -32,7 +32,7 @@ Production deployment: link to the existing project with `vercel link --project 
 
 ## Conversations and data
 
-The sidebar archives sessions in `relay-conversations-v2` localStorage, with titles from the first prompt. It supports selection, new sessions, reload persistence, and individual deletion with confirmation. Old single-session storage is migrated. Replies are appended to their original session even if another chat is selected.
+Every page load opens a fresh, empty New Chat with a new session ID. The sidebar retains sessions in `relay-conversations-v2` localStorage, with titles from the first prompt; only an explicit sidebar selection loads previous messages. Unsent drafts and selection are not persisted. The first submitted prompt adds the draft to the archive. It supports new sessions, reload persistence of history, and individual deletion with confirmation. Old single-session storage is migrated into history without auto-selecting it. Replies are appended to their original session even if another chat is selected.
 
 Deletion removes a conversation from this browser only; it does not erase MongoDB history. This is not an authenticated cross-device archive. Invalid/blocked storage shows a warning rather than crashing or silently wiping the archive.
 

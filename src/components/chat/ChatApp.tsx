@@ -4,7 +4,7 @@ import { Button } from '../ui/button';
 import { Sidebar } from './Sidebar';
 import { ChatArea } from './ChatArea';
 import { InputBar } from './InputBar';
-import { ARCHIVE_KEY, archiveReducer, createConversation, createId, loadArchive } from './archive';
+import { ARCHIVE_KEY, archiveReducer, createConversation, createId, loadArchive, serializeArchive } from './archive';
 import type { ApiResponse } from './types';
 
 function loadSavedChats() {
@@ -23,7 +23,7 @@ export function ChatApp() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(initial.warning ?? null);
   const storageWarning = useRef(false);
-  const chat = archive.conversations.find((item) => item.id === archive.activeId)!;
+  const chat = archive.conversations.find((item) => item.id === archive.activeId) ?? archive.draft!;
 
   useEffect(() => {
     const controller = new AbortController();
@@ -39,7 +39,7 @@ export function ChatApp() {
   useEffect(() => {
     // Preserve an unreadable archive; do not silently replace it with an empty one.
     if (initial.warning) return;
-    try { localStorage.setItem(ARCHIVE_KEY, JSON.stringify(archive)); }
+    try { localStorage.setItem(ARCHIVE_KEY, serializeArchive(archive)); }
     catch {
       if (!storageWarning.current) setToast('Browser storage is full or disabled. New changes cannot be saved on this device.');
       storageWarning.current = true;
