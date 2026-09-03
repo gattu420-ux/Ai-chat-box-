@@ -12,7 +12,7 @@ async function harness(responses, run) {
   let connections = 0;
   const model = { find() { return { sort() { return this; }, limit() { return this; }, async lean() { return []; } }; }, async insertMany(items) { writes.push(items); } };
   const mongoose = { Schema: class {}, models: {}, model() { return model; }, connection: { readyState: 0 }, async connect() { connections++; this.connection.readyState = 1; return this; } };
-  const fakeAi = { models: { async generateContent(request) { requests.push(request); const result = responses.shift(); if (result instanceof Error) throw result; return { text: result }; } } };
+  const fakeAi = { models: { async generateContent(request) { requests.push(request); const result = responses.shift(); if (result instanceof Error) throw result; return typeof result === 'object' ? result : { text: result }; } } };
   const context = { performance, module: { exports: {} }, console: { warn() {}, error() {}, log() {} }, process: { env: { VERCEL: '1', MONGO_URI: 'mongodb://fixture', GEMINI_API_KEY: 'fixture', GEMINI_MODEL: 'gemini-3.5-flash-lite' } },
     require(name) {
       if (name === 'mongoose') return mongoose;
@@ -35,6 +35,54 @@ test('health and invalid inputs do not connect to MongoDB or call Gemini', async
     assert.equal((await post({ sessionId: { $ne: null }, message: 'hello' })).status, 400);
     assert.equal((await post({ sessionId: 'fixture', message: ' ' })).status, 400);
     assert.equal(requests.length, 0); assert.equal(connections(), 0);
+  });
+});
+
+const searchFixture = {
+  text: 'Recent technology headline from a verified source.',
+  candidates: [{ groundingMetadata: {
+    webSearchQueries: ['technology news this week'],
+    groundingChunks: [{ web: { uri: 'https://example.com/news', title: 'Example News' } }],
+    groundingSupports: [{ segment: { endIndex: 51 }, groundingChunkIndices: [0] }],
+    searchEntryPoint: { renderedContent: '<div>Google Search suggestions</div>' },
+  } }],
+};
+
+test('current questions call Google Search separately and return real provider metadata', async () => {
+  await harness([JSON.stringify({ intent: 'answer_question', needsSearch: true, searchQuery: 'technology headlines this week', answer: 'Do not use this ungrounded draft.' }), searchFixture], async ({ post, requests, writes }) => {
+    const response = await post({ sessionId: 'search-fixture', message: 'Latest tech headlines this week?' });
+    const payload = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(payload.routingSource, 'gemini_grounded_search');
+    assert.equal(payload.message, searchFixture.text);
+    assert.deepEqual(payload.groundingMetadata, searchFixture.candidates[0].groundingMetadata);
+    assert.equal(requests.length, 2);
+    assert.equal(requests[0].config.tools, undefined);
+    assert.deepEqual(requests[1].config.tools, [{ googleSearch: {} }]);
+    assert.equal(requests[1].config.responseMimeType, undefined);
+    assert.equal(requests[1].contents.length, 1);
+    assert.equal(requests[1].contents[0].parts[0].text, 'technology headlines this week');
+    assert.match(requests[1].config.systemInstruction, /Current UTC date: \d{4}-\d{2}-\d{2}/);
+    assert.equal(writes.length, 1);
+  });
+});
+
+test('ungrounded output cannot be advertised as a successful search or saved as fact', async () => {
+  await harness([JSON.stringify({ intent: 'answer_question', needsSearch: true }), 'I searched the web, trust me.'], async ({ post, writes }) => {
+    const response = await post({ sessionId: 'search-fixture', message: 'Latest tech headlines?' });
+    assert.equal(response.status, 503);
+    assert.match((await response.json()).error, /did not return verifiable sources/);
+    assert.equal(writes.length, 0);
+  });
+});
+
+test('recent internal orders remain database-only even if search flag is set', async () => {
+  await harness([JSON.stringify({ intent: 'query_data', target: 'orders', filters: {}, needsSearch: true })], async ({ post, requests }) => {
+    const response = await post({ sessionId: 'orders-fixture', message: 'Show our most recent internal orders' });
+    assert.equal(response.status, 200);
+    assert.match((await response.json()).routingSource, /MongoDB/);
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].config.tools, undefined);
   });
 });
 test('general reply uses one model request and one combined history write', async () => {

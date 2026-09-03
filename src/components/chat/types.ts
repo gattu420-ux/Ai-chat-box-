@@ -1,3 +1,10 @@
+export type GroundingMetadata = {
+  webSearchQueries?: string[];
+  groundingChunks?: { web?: { uri?: string; title?: string } }[];
+  groundingSupports?: unknown[];
+  searchEntryPoint?: { renderedContent?: string };
+};
+
 export type Message = {
   id: string;
   role: 'user' | 'assistant';
@@ -6,6 +13,7 @@ export type Message = {
   responseType?: string;
   intent?: string;
   data?: unknown;
+  groundingMetadata?: GroundingMetadata;
   createdAt: number;
 };
 
@@ -15,6 +23,7 @@ export type ApiResponse = {
   routingSource: string;
   message: string;
   data: unknown;
+  groundingMetadata?: GroundingMetadata;
 };
 
 export type Conversation = {

@@ -30,7 +30,15 @@ Production deployment: link to the existing project with `vercel link --project 
 - MongoDB uses Mongoose's warm connection pool and a shared in-flight promise. Every cold serverless instance still needs its own initial connection.
 - A provider outage still returns an honest error. Neither the model choice nor retries can guarantee zero 503 responses or a fixed two-second latency.
 
-## Conversations and data
+## Live Google Search
+
+Current events, recent developments, changing public facts, and explicit online-search requests are routed to a separate Gemini call with `config.tools: [{ googleSearch: {} }]`. The JSON classifier itself does not search; ordinary greetings and creative requests keep their fast general-answer path. Internal record requests remain MongoDB-only. The search call receives a standalone public question rather than the full database conversation history.
+
+Successful grounded replies include `routingSource: "gemini_grounded_search"` and the provider's `groundingMetadata` (queries, source chunks, citation supports, and search suggestions). The frontend preserves it with the saved message, displays source links, and isolates Google's suggestions HTML in a sandboxed iframe without script or same-origin permission. If Gemini returns no web sources, the API reports search unavailability instead of passing off an unverified answer as searched.
+
+The server supplies the current UTC date for relative news questions. Search can take longer than ordinary replies: grounded model calls allow 20 seconds each, the Vercel function allows 60 seconds, and the browser waits up to 65 seconds. Provider quotas, billing, and availability still apply; enabling search does not guarantee every answer is accurate. Google Search grounding may incur charges on your existing Google project. No new API key or model change is required.
+
+## Conversation persistence
 
 A first visit or new tab opens a fresh, empty New Chat. The sidebar retains sessions in `relay-conversations-v2` localStorage, with titles from the first prompt. Each tab stores its own selected conversation in sessionStorage as `active_tab_session_id`: refreshing restores that conversation if it still exists. Submitting the first prompt adds the draft to the archive and remembers its selection; clicking a sidebar conversation also remembers that selection. New Chat generates a fresh draft and clears the tab selection, without deleting history. Unsent drafts are not archived. Individual deletion has confirmation. Old single-session storage is migrated into history without auto-selecting it unless the tab already selected it. Replies are appended to their original session even if another chat is selected. If tab storage is unavailable, history remains usable with a warning that refresh may open a new chat.
 

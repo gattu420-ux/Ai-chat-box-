@@ -34,3 +34,20 @@ test('data cannot inject HTML', () => {
   const html = render({ note: '<script>alert(1)</script>' });
   assert.doesNotMatch(html, /<script>/); assert.match(html, /&lt;script&gt;/);
 });
+
+test('grounding sources allow only web links and isolate provider suggestions', () => {
+  const html = renderToStaticMarkup(React.createElement(componentModule.exports.SearchSources, { metadata: {
+    groundingChunks: [
+      { web: { uri: 'https://example.com/news', title: 'Verified source' } },
+      { web: { uri: 'javascript:alert(1)', title: 'Bad link' } },
+      { web: { uri: 'data:text/html,bad', title: 'Bad data' } },
+    ],
+    searchEntryPoint: { renderedContent: '<script>alert(1)</script><div>Suggestions</div>' },
+  } }));
+  assert.match(html, /href="https:\/\/example.com\/news"/);
+  assert.match(html, /Verified source/);
+  assert.doesNotMatch(html, /href="javascript:|href="data:|<script>/);
+  assert.match(html, /sandbox="allow-popups allow-popups-to-escape-sandbox"/);
+  assert.doesNotMatch(html, /allow-scripts|allow-same-origin/);
+  assert.match(html, /title="Google Search suggestions"/);
+});

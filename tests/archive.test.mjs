@@ -6,6 +6,16 @@ const message = (role = 'user', text = 'First prompt') => ({ id: crypto.randomUU
 const base = () => ({ version: 2, activeId: 'one', draft: createConversation('one'), conversations: [] });
 const storage = (values) => ({ getItem: (key) => values[key] ?? null });
 
+test('grounding metadata survives browser archive persistence', () => {
+  let state = archiveReducer(base(), { type: 'append', id: 'one', message: message() });
+  const metadata = { groundingChunks: [{ web: { uri: 'https://example.com/news', title: 'News' } }] };
+  state = archiveReducer(state, { type: 'append', id: 'one', message: {
+    ...message('assistant', 'News reply'), groundingMetadata: metadata, routingSource: 'gemini_grounded_search',
+  } });
+  const loaded = loadArchive(storage({ [ARCHIVE_KEY]: serializeArchive(state) })).archive;
+  assert.deepEqual(loaded.conversations[0].messages[1].groundingMetadata, metadata);
+});
+
 test('titles normalize whitespace and truncate long first prompts', () => {
   assert.equal(titleFromPrompt('  hello\n world  '), 'hello world');
   assert.equal(titleFromPrompt('x'.repeat(100)).length, 55);

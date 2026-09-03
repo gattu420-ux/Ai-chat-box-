@@ -2,7 +2,31 @@
 
 import ReactMarkdown from 'react-markdown';
 import { Bot, UserRound } from 'lucide-react';
-import type { Message } from './types';
+import type { GroundingMetadata, Message } from './types';
+
+export function SearchSources({ metadata }: { metadata?: GroundingMetadata }) {
+  if (!metadata) return null;
+  const chunks = Array.isArray(metadata.groundingChunks) ? metadata.groundingChunks : [];
+  const sources = chunks.flatMap((chunk, index) => {
+    try {
+      const url = new URL(chunk?.web?.uri ?? '');
+      if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password) return [];
+      return [{ uri: url.href, title: typeof chunk.web?.title === 'string' ? chunk.web.title : url.hostname, index }];
+    } catch { return []; }
+  });
+  const suggestions = metadata.searchEntryPoint?.renderedContent;
+  return <section aria-label="Google Search sources" className="mt-4 space-y-3">
+    <p className="font-mono text-[10px] uppercase tracking-wider text-[#a9cdb4]">Sources from Google Search</p>
+    <div className="flex flex-wrap gap-2">{sources.map((source) => <a key={`${source.index}-${source.uri}`}
+      href={source.uri} target="_blank" rel="noopener noreferrer"
+      className="max-w-full break-words rounded-lg border border-[#34463b] bg-[#142019] px-3 py-1.5 text-xs text-[#b8ffcd] hover:underline">
+      {source.index + 1}. {source.title}
+    </a>)}</div>
+    {typeof suggestions === 'string' && suggestions && <iframe title="Google Search suggestions"
+      className="h-40 w-full rounded-lg border-0 bg-white" sandbox="allow-popups allow-popups-to-escape-sandbox"
+      referrerPolicy="no-referrer" srcDoc={`<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src https: data:; base-uri 'none'; form-action 'none';"><base target="_blank"></head><body>${suggestions}</body></html>`} />}
+  </section>;
+}
 
 function DataValue({ value }: { value: unknown }) {
   if (value === null || value === undefined) return <span className="text-[#697383]">Not provided</span>;
@@ -51,9 +75,10 @@ export function MessageBubble({ item }: { item: Message }) {
           <ReactMarkdown>{item.message}</ReactMarkdown>
         </div>
         {!isUser && <DataView data={item.data} />}
+        {!isUser && <SearchSources metadata={item.groundingMetadata} />}
         {!isUser && item.routingSource && (
           <div className="mt-3 flex flex-wrap items-center gap-2 font-mono text-[9px] uppercase tracking-[0.12em] text-[#626c7a]">
-            <span className="rounded border border-[#272d37] bg-[#11141a] px-2 py-1">{item.routingSource}</span>
+            <span className="rounded border border-[#272d37] bg-[#11141a] px-2 py-1">{item.routingSource === 'gemini_grounded_search' ? 'Gemini + Google Search' : item.routingSource}</span>
             {item.intent && <span>{item.intent.replaceAll('_', ' ')}</span>}
           </div>
         )}

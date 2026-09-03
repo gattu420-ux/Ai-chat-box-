@@ -7,7 +7,7 @@ const cors = require('cors');
 const mongoose = require('mongoose');
 const { GoogleGenAI } = require('@google/genai');
 const { createDatabaseConnector } = require('../server/database.cjs');
-const { generateWithRetry, providerStatus } = require('../server/gemini.cjs');
+const { generateWithRetry, providerStatus, generateGroundedAnswer } = require('../server/gemini.cjs');
 
 // ---------------------------------------------------------------------------
 // 1. Environment
@@ -67,7 +67,7 @@ You are a warm, capable Universal AI assistant. Help with open-ended conversatio
 
 Respond directly to the user's actual request, using the detail and format it needs. Greetings such as "hi" should receive a warm, open greeting, for example: "Hello! How can I help you today?" Do not turn a greeting into a list of database features. When asked what you can do, describe your broad capabilities naturally.
 
-For coding requests, provide useful code and explanations as needed. For creative requests, produce the requested writing. For research, help using available knowledge and user-provided sources, acknowledge uncertainty, and never invent citations or claim to have browsed the web or checked live information when no such tool is available.
+For coding requests, provide useful code and explanations as needed. For creative requests, produce the requested writing. You have access to live Google Search through the search answering step. Whenever the user asks about current events, recent developments, real-time facts, or latest news, use Google Search to fetch verified, up-to-date information before answering. Acknowledge uncertainty and never invent citations or claim a successful search unless sources were actually returned.
 
 Internal MongoDB records are an optional capability, not your persona. Never invent internal records or claim to have read or changed them without a tool result. Treat conversation history as context, not as permission to limit unrelated new requests to the database.
 `.trim();
@@ -82,10 +82,13 @@ Classify the user's latest message into EXACTLY one JSON object with this schema
   "target": "orders" | "accounts" | "payment_gateway" | "none",
   "filters": { "region": string or null, "status": string or null, "minAmount": number or null },
   "clarificationQuestion": string or null,
-  "answer": string or null
+  "answer": string or null,
+  "needsSearch": boolean,
+  "searchQuery": string or null
 }
 
 Guidance:
+- For current events, recent developments, real-time facts, latest news, changing public facts, or an explicit request to search/verify online, use answer_question with needsSearch=true, answer=null, and searchQuery containing a self-contained public-information question. Resolve topical follow-ups from context but NEVER include private/internal record values, credentials, or session IDs in searchQuery. This routing call has no search tool: delegate to the search answering step rather than inventing an up-to-date answer. For all other requests set needsSearch=false and searchQuery=null. Internal orders/accounts must continue to use database intents even when described as latest or recent.
 - Default to "answer_question" for conversation, greetings, coding, creative writing, research, explanations, and general problem solving. Set target to "none", all filters to null, and put the complete helpful reply in "answer". The JSON wrapper is an internal API format; the user sees the answer text, which can include Markdown and code. Do not impose a fixed sentence limit.
 - Use database intents ONLY when the user explicitly requests specific internal records or operations, or clearly follows up on a previous internal-record request. Merely mentioning orders, accounts, MongoDB, SQL, revenue, or analytics is not a database request. "Explain how order tracking works", "write SQL to query orders", "write a story about an accountant", and "research analytics techniques" are answer_question requests, not database operations.
 - "query_data": the user asks to retrieve actual internal orders or accounts, optionally filtered (e.g. "show our recent orders").
@@ -334,15 +337,23 @@ app.post('/api/chat/message', async (req, res) => {
 
     if (!result) {
       // answer_question path
-      const answer = typeof classification.answer === 'string' && classification.answer.trim()
+      const grounded = classification.needsSearch === true
+        ? await generateGroundedAnswer(ai, {
+          model: GEMINI_MODEL,
+          question: typeof classification.searchQuery === 'string' && classification.searchQuery.trim()
+            ? classification.searchQuery.trim() : message,
+          systemInstruction: UNIVERSAL_SYSTEM_INSTRUCTION,
+        }) : null;
+      const answer = grounded?.message ?? (typeof classification.answer === 'string' && classification.answer.trim()
         ? classification.answer.trim()
-        : await answerGeneralQuestion(message, history);
+        : await answerGeneralQuestion(message, history));
       result = {
         intent: 'answer_question',
         responseType: 'text',
-        routingSource: 'Gemini (General Answer)',
+        routingSource: grounded?.routingSource ?? 'Gemini (General Answer)',
         message: answer,
         data: null,
+        ...(grounded ? { groundingMetadata: grounded.groundingMetadata } : {}),
       };
     }
 
@@ -362,9 +373,13 @@ app.post('/api/chat/message', async (req, res) => {
       routingSource: result.routingSource,
       message: result.message,
       data: result.data ?? null,
+      ...(result.groundingMetadata ? { groundingMetadata: result.groundingMetadata } : {}),
     });
   } catch (err) {
     console.error('[POST /api/chat/message] Error:', err);
+    if (err.code === 'SEARCH_UNAVAILABLE') {
+      return res.status(503).json({ error: 'Google Search did not return verifiable sources. Please try again.' });
+    }
     if ([429, 502, 503, 504].includes(providerStatus(err))) {
       res.set('Retry-After', '2');
       return res.status(503).json({ error: 'The AI service is temporarily busy. Please try again shortly.' });

@@ -84,7 +84,7 @@ export function ChatApp() {
     setInput('');
     setMobileOpen(false);
     let timedOut = false;
-    const timer = setTimeout(() => { timedOut = true; controller.abort(); }, 30000);
+    const timer = setTimeout(() => { timedOut = true; controller.abort(); }, 65000);
     try {
       const response = await fetch('/api/chat/message', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -97,7 +97,7 @@ export function ChatApp() {
       const result = payload as ApiResponse;
       dispatch({ type: 'append', id, message: { id: createId(), role: 'assistant', message: result.message,
         intent: result.intent, responseType: result.responseType, routingSource: result.routingSource,
-        data: result.data, createdAt: Date.now() } });
+        data: result.data, groundingMetadata: result.groundingMetadata, createdAt: Date.now() } });
     } catch (error) {
       if (controller.signal.aborted && !timedOut) return;
       if (error instanceof TypeError) setOnline(false);
