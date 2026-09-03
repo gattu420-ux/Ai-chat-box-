@@ -4,11 +4,19 @@ import { Button } from '../ui/button';
 import { Sidebar } from './Sidebar';
 import { ChatArea } from './ChatArea';
 import { InputBar } from './InputBar';
-import { ARCHIVE_KEY, archiveReducer, createConversation, createId, loadArchive, serializeArchive } from './archive';
+import { ARCHIVE_KEY, archiveReducer, createConversation, createId, loadArchive, saveTabSession, serializeArchive } from './archive';
 import type { ApiResponse } from './types';
 
 function loadSavedChats() {
-  try { return loadArchive(window.localStorage); }
+  // Resolve storage independently: a blocked tab store must not hide saved chats.
+  let tabStorage: Storage | undefined;
+  let tabWarning: string | undefined;
+  try { tabStorage = window.sessionStorage; }
+  catch { tabWarning = 'Tab storage is unavailable. Refreshing may open a new chat.'; }
+  try {
+    const loaded = loadArchive(window.localStorage, tabStorage);
+    return { ...loaded, tabWarning: loaded.tabWarning ?? tabWarning };
+  }
   catch { return { ...loadArchive(), warning: 'Browser storage is unavailable. Chats will only last for this visit.' }; }
 }
 
@@ -21,8 +29,9 @@ export function ChatApp() {
   const [online, setOnline] = useState<boolean | null>(null);
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [toast, setToast] = useState<string | null>(initial.warning ?? null);
+  const [toast, setToast] = useState<string | null>(initial.warning ?? initial.tabWarning ?? null);
   const storageWarning = useRef(false);
+  const tabStorageWarning = useRef(false);
   const chat = archive.conversations.find((item) => item.id === archive.activeId) ?? archive.draft!;
 
   useEffect(() => {
@@ -43,6 +52,16 @@ export function ChatApp() {
     catch {
       if (!storageWarning.current) setToast('Browser storage is full or disabled. New changes cannot be saved on this device.');
       storageWarning.current = true;
+    }
+  }, [archive, initial.warning]);
+
+  useEffect(() => {
+    try { saveTabSession(archive, window.sessionStorage); }
+    catch {
+      if (!tabStorageWarning.current && !initial.warning) {
+        setToast('Tab storage is unavailable. Refreshing may open a new chat.');
+      }
+      tabStorageWarning.current = true;
     }
   }, [archive, initial.warning]);
 
